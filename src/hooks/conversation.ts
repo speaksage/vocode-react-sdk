@@ -17,6 +17,7 @@ import { AudioEncoding } from "../types/vocode/audioEncoding";
 import {
   AudioConfigStartMessage,
   AudioMessage,
+  SpeakingSignalMessage,
   StartMessage,
   StopMessage,
 } from "../types/vocode/websocket";
@@ -55,13 +56,15 @@ export const useConversation = (
   const [active, setActive] = React.useState(true);
   const toggleActive = () => setActive(!active);
 
+  const [keyIsDown, setKeyIsDown] = React.useState(false);
+
   // get audio context and metadata about user audio
   React.useEffect(() => {
     const audioContext = new AudioContext();
     setAudioContext(audioContext);
     const audioAnalyser = audioContext.createAnalyser();
     setAudioAnalyser(audioAnalyser);
-  }, []);
+  }, []); 
 
   const recordingDataListener = ({ data }: { data: Blob }) => {
     blobToBase64(data).then((base64Encoded: string | null) => {
@@ -70,6 +73,7 @@ export const useConversation = (
         type: "websocket_audio",
         data: base64Encoded,
       };
+      console.log("sending mic audio to websocket");
       socket?.readyState === WebSocket.OPEN &&
         socket.send(stringify(audioMessage));
     });
@@ -79,12 +83,17 @@ export const useConversation = (
   React.useEffect(() => {
     if (!recorder || !socket) return;
     if (status === "connected") {
-      if (active)
+      console.log("status is connected");
+      if (keyIsDown){
+        console.log("ADDING RECORDING DATA LISTENER");
         recorder.addEventListener("dataavailable", recordingDataListener);
-      else
+      }
+      else {
+        console.log("REMOVING RECORDING DATA LISTENER");
         recorder.removeEventListener("dataavailable", recordingDataListener);
+      }
     }
-  }, [recorder, socket, status, active]);
+  }, [recorder, socket, status, active, keyIsDown]);
 
   // accept wav audio from webpage
   React.useEffect(() => {
@@ -93,6 +102,49 @@ export const useConversation = (
     };
     registerWav().catch(console.error);
   }, []);
+
+// Setup event listeners only once when the component is mounted
+React.useEffect(() => {
+  const handleKeyDown = (event: KeyboardEvent) => {
+    if (event.code === "KeyP" && !keyIsDown && socket && status === "connected") {
+      setKeyIsDown(true);
+      console.log("P KEY PRESSED, STARTING SPEAKING");
+      const speakingSignalMessage: SpeakingSignalMessage = {
+        type: "websocket_speaking_signal_change",
+        is_active: true,
+      };
+      socket.send(stringify(speakingSignalMessage));
+      if (recorder.state !== 'recording'){
+        console.log("Recorder resuming");
+        recorder.resume();
+      }
+    }
+  };
+
+  const handleKeyUp = (event: KeyboardEvent) => {
+    if (event.code === "KeyP" && keyIsDown && socket && status === "connected") {
+      setKeyIsDown(false);
+      console.log("P KEY LET GO, STOPPED SPEAKING");
+
+      const speakingSignalMessage: SpeakingSignalMessage = {
+        type: "websocket_speaking_signal_change",
+        is_active: false,
+      };
+      socket.send(stringify(speakingSignalMessage));
+      console.log("Recorder pausing");
+      recorder.pause();
+    }
+  };
+
+  document.addEventListener("keydown", handleKeyDown);
+  document.addEventListener("keyup", handleKeyUp);
+
+  return () => {
+    document.removeEventListener("keydown", handleKeyDown);
+    document.removeEventListener("keyup", handleKeyUp);
+  };
+}, [keyIsDown, socket, status]); 
+
 
   // play audio that is queued
   React.useEffect(() => {
@@ -125,12 +177,17 @@ export const useConversation = (
   }, [audioQueue, processing]);
 
   const stopConversation = (error?: Error) => {
+    console.log('stopConversation: stopping');
     setAudioQueue([]);
     setCurrentSpeaker("none");
     if (error) {
       setError(error);
+      console.log("status set to error");
+
       setStatus("error");
     } else {
+      console.log("status set to idle");
+
       setStatus("idle");
     }
     if (!recorder || !socket) return;
