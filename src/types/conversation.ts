@@ -4,6 +4,7 @@ import { TranscriberConfig } from "./vocode/transcriber";
 import { AudioEncoding } from "./vocode/audioEncoding";
 
 export type ConversationStatus = "idle" | "connecting" | "connected" | "error";
+export type MicrophoneStatus = "recording" | "paused";
 
 export type CurrentSpeaker = "agent" | "user" | "none";
 

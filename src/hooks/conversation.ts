@@ -9,6 +9,7 @@ import {
   ConversationConfig,
   ConversationStatus,
   CurrentSpeaker,
+  MicrophoneStatus,
   SelfHostedConversationConfig,
   Transcript,
 } from "../types/conversation";
@@ -32,6 +33,7 @@ export const useConversation = (
   config: ConversationConfig | SelfHostedConversationConfig
 ): {
   status: ConversationStatus;
+  microphoneStatus: MicrophoneStatus;
   start: () => void;
   stop: () => void;
   error: Error | undefined;
@@ -51,12 +53,14 @@ export const useConversation = (
   const [recorder, setRecorder] = React.useState<IMediaRecorder>();
   const [socket, setSocket] = React.useState<WebSocket>();
   const [status, setStatus] = React.useState<ConversationStatus>("idle");
+  const [microphoneStatus, setMicrophoneStatus] = React.useState<MicrophoneStatus>("paused");
   const [error, setError] = React.useState<Error>();
   const [transcripts, setTranscripts] = React.useState<Transcript[]>([]);
   const [active, setActive] = React.useState(true);
   const toggleActive = () => setActive(!active);
 
   const [keyIsDown, setKeyIsDown] = React.useState(false);
+
 
   // get audio context and metadata about user audio
   React.useEffect(() => {
@@ -73,7 +77,6 @@ export const useConversation = (
         type: "websocket_audio",
         data: base64Encoded,
       };
-      console.log("sending mic audio to websocket");
       socket?.readyState === WebSocket.OPEN &&
         socket.send(stringify(audioMessage));
     });
@@ -85,11 +88,9 @@ export const useConversation = (
     if (status === "connected") {
       console.log("status is connected");
       if (keyIsDown){
-        console.log("ADDING RECORDING DATA LISTENER");
         recorder.addEventListener("dataavailable", recordingDataListener);
       }
       else {
-        console.log("REMOVING RECORDING DATA LISTENER");
         recorder.removeEventListener("dataavailable", recordingDataListener);
       }
     }
@@ -106,15 +107,16 @@ export const useConversation = (
 // Setup event listeners only once when the component is mounted
 React.useEffect(() => {
   const handleKeyDown = (event: KeyboardEvent) => {
-    if (event.code === "KeyP" && !keyIsDown && socket && status === "connected") {
+    if (event.code === "Space" && !keyIsDown && socket && status === "connected") {
+      event.preventDefault();
       setKeyIsDown(true);
-      console.log("P KEY PRESSED, STARTING SPEAKING");
       const speakingSignalMessage: SpeakingSignalMessage = {
         type: "websocket_speaking_signal_change",
         is_active: true,
       };
       socket.send(stringify(speakingSignalMessage));
       if (recorder.state !== 'recording'){
+        setMicrophoneStatus("recording");
         console.log("Recorder resuming");
         recorder.resume();
       }
@@ -122,15 +124,15 @@ React.useEffect(() => {
   };
 
   const handleKeyUp = (event: KeyboardEvent) => {
-    if (event.code === "KeyP" && keyIsDown && socket && status === "connected") {
+    if (event.code === "Space" && keyIsDown && socket && status === "connected") {
       setKeyIsDown(false);
-      console.log("P KEY LET GO, STOPPED SPEAKING");
 
       const speakingSignalMessage: SpeakingSignalMessage = {
         type: "websocket_speaking_signal_change",
         is_active: false,
       };
       socket.send(stringify(speakingSignalMessage));
+      setMicrophoneStatus("paused");
       console.log("Recorder pausing");
       recorder.pause();
     }
@@ -432,6 +434,7 @@ React.useEffect(() => {
 
   return {
     status,
+    microphoneStatus,
     start: startConversation,
     stop: stopConversation,
     error,
