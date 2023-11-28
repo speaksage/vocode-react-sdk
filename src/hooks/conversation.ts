@@ -40,12 +40,14 @@ export const useConversation = (
   active: boolean;
   setActive: (active: boolean) => void;
   toggleActive: () => void;
-  analyserNode: AnalyserNode | undefined;
+  agentAnalyserNode: AnalyserNode | undefined;
+  micAnalyserNode: AnalyserNode | undefined;
   transcripts: Transcript[];
   currentSpeaker: CurrentSpeaker;
 } => {
   const [audioContext, setAudioContext] = React.useState<AudioContext>();
-  const [audioAnalyser, setAudioAnalyser] = React.useState<AnalyserNode>();
+  const [agentAnalyser, setAgentAnalyser] = React.useState<AnalyserNode>();
+  const [micAnalyser, setMicAnalyser] = React.useState<AnalyserNode>();
   const [audioQueue, setAudioQueue] = React.useState<Buffer[]>([]);
   const [currentSpeaker, setCurrentSpeaker] =
     React.useState<CurrentSpeaker>("none");
@@ -66,8 +68,10 @@ export const useConversation = (
   React.useEffect(() => {
     const audioContext = new AudioContext();
     setAudioContext(audioContext);
-    const audioAnalyser = audioContext.createAnalyser();
-    setAudioAnalyser(audioAnalyser);
+    const agentAudioAnalyser = audioContext.createAnalyser();
+    setAgentAnalyser(agentAudioAnalyser);
+    const micAudioAnalyser = audioContext.createAnalyser();
+    setMicAnalyser(micAudioAnalyser);
   }, []); 
 
   const recordingDataListener = ({ data }: { data: Blob }) => {
@@ -152,12 +156,12 @@ React.useEffect(() => {
   React.useEffect(() => {
     const playArrayBuffer = (arrayBuffer: ArrayBuffer) => {
       audioContext &&
-        audioAnalyser &&
+        micAnalyser && agentAnalyser &&
         audioContext.decodeAudioData(arrayBuffer, (buffer) => {
           const source = audioContext.createBufferSource();
           source.buffer = buffer;
           source.connect(audioContext.destination);
-          source.connect(audioAnalyser);
+          source.connect(agentAnalyser);
           setCurrentSpeaker("agent");
           source.start(0);
           source.onended = () => {
@@ -264,7 +268,7 @@ React.useEffect(() => {
   });
 
   const startConversation = async () => {
-    if (!audioContext || !audioAnalyser) return;
+    if (!audioContext || !agentAnalyser || !micAnalyser) return;
     setStatus("connecting");
 
     if (!isSafari && !isChrome) {
@@ -343,6 +347,13 @@ React.useEffect(() => {
         video: false,
         audio: trackConstraints,
       });
+      
+      // Create a MediaStreamAudioSourceNode from the microphone stream
+      const source = audioContext.createMediaStreamSource(audioStream);
+      
+      // Connect the source to the analyser
+      source.connect(micAnalyser);
+
     } catch (error) {
       if (error instanceof DOMException && error.name === "NotAllowedError") {
         alert(
@@ -441,7 +452,8 @@ React.useEffect(() => {
     toggleActive,
     active,
     setActive,
-    analyserNode: audioAnalyser,
+    agentAnalyserNode: agentAnalyser,
+    micAnalyserNode: micAnalyser,
     transcripts,
     currentSpeaker,
   };
