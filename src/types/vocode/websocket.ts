@@ -9,6 +9,7 @@ export type WebSocketMessageType =
   | "websocket_transcript"
   | "websocket_ready"
   | "websocket_stop"
+  | "websocket_speaking_signal_change"
   | "websocket_audio_config_start";
 
 export interface WebSocketMessage {
@@ -46,6 +47,11 @@ export interface AudioConfigStartMessage extends WebSocketMessage {
 export interface AudioMessage extends WebSocketMessage {
   type: "websocket_audio";
   data: string;
+}
+
+export interface SpeakingSignalMessage extends WebSocketMessage {
+  type: "websocket_speaking_signal_change";
+  is_active: boolean;
 }
 
 export interface TranscriptMessage extends WebSocketMessage {

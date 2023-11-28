@@ -9,6 +9,7 @@ import {
   ConversationConfig,
   ConversationStatus,
   CurrentSpeaker,
+  MicrophoneStatus,
   SelfHostedConversationConfig,
   Transcript,
 } from "../types/conversation";
@@ -17,6 +18,7 @@ import { AudioEncoding } from "../types/vocode/audioEncoding";
 import {
   AudioConfigStartMessage,
   AudioMessage,
+  SpeakingSignalMessage,
   StartMessage,
   StopMessage,
 } from "../types/vocode/websocket";
@@ -31,18 +33,21 @@ export const useConversation = (
   config: ConversationConfig | SelfHostedConversationConfig
 ): {
   status: ConversationStatus;
+  microphoneStatus: MicrophoneStatus;
   start: () => void;
   stop: () => void;
   error: Error | undefined;
   active: boolean;
   setActive: (active: boolean) => void;
   toggleActive: () => void;
-  analyserNode: AnalyserNode | undefined;
+  agentAnalyserNode: AnalyserNode | undefined;
+  micAnalyserNode: AnalyserNode | undefined;
   transcripts: Transcript[];
   currentSpeaker: CurrentSpeaker;
 } => {
   const [audioContext, setAudioContext] = React.useState<AudioContext>();
-  const [audioAnalyser, setAudioAnalyser] = React.useState<AnalyserNode>();
+  const [agentAnalyser, setAgentAnalyser] = React.useState<AnalyserNode>();
+  const [micAnalyser, setMicAnalyser] = React.useState<AnalyserNode>();
   const [audioQueue, setAudioQueue] = React.useState<Buffer[]>([]);
   const [currentSpeaker, setCurrentSpeaker] =
     React.useState<CurrentSpeaker>("none");
@@ -50,18 +55,24 @@ export const useConversation = (
   const [recorder, setRecorder] = React.useState<IMediaRecorder>();
   const [socket, setSocket] = React.useState<WebSocket>();
   const [status, setStatus] = React.useState<ConversationStatus>("idle");
+  const [microphoneStatus, setMicrophoneStatus] = React.useState<MicrophoneStatus>("paused");
   const [error, setError] = React.useState<Error>();
   const [transcripts, setTranscripts] = React.useState<Transcript[]>([]);
   const [active, setActive] = React.useState(true);
   const toggleActive = () => setActive(!active);
 
+  const [keyIsDown, setKeyIsDown] = React.useState(false);
+
+
   // get audio context and metadata about user audio
   React.useEffect(() => {
     const audioContext = new AudioContext();
     setAudioContext(audioContext);
-    const audioAnalyser = audioContext.createAnalyser();
-    setAudioAnalyser(audioAnalyser);
-  }, []);
+    const agentAudioAnalyser = audioContext.createAnalyser();
+    setAgentAnalyser(agentAudioAnalyser);
+    const micAudioAnalyser = audioContext.createAnalyser();
+    setMicAnalyser(micAudioAnalyser);
+  }, []); 
 
   const recordingDataListener = ({ data }: { data: Blob }) => {
     blobToBase64(data).then((base64Encoded: string | null) => {
@@ -79,12 +90,15 @@ export const useConversation = (
   React.useEffect(() => {
     if (!recorder || !socket) return;
     if (status === "connected") {
-      if (active)
+      console.log("status is connected");
+      if (keyIsDown){
         recorder.addEventListener("dataavailable", recordingDataListener);
-      else
+      }
+      else {
         recorder.removeEventListener("dataavailable", recordingDataListener);
+      }
     }
-  }, [recorder, socket, status, active]);
+  }, [recorder, socket, status, active, keyIsDown]);
 
   // accept wav audio from webpage
   React.useEffect(() => {
@@ -94,16 +108,60 @@ export const useConversation = (
     registerWav().catch(console.error);
   }, []);
 
+// Setup event listeners only once when the component is mounted
+React.useEffect(() => {
+  const handleKeyDown = (event: KeyboardEvent) => {
+    if (event.code === "Space" && !keyIsDown && socket && status === "connected") {
+      event.preventDefault();
+      setKeyIsDown(true);
+      const speakingSignalMessage: SpeakingSignalMessage = {
+        type: "websocket_speaking_signal_change",
+        is_active: true,
+      };
+      socket.send(stringify(speakingSignalMessage));
+      if (recorder.state !== 'recording'){
+        setMicrophoneStatus("recording");
+        console.log("Recorder resuming");
+        recorder.resume();
+      }
+    }
+  };
+
+  const handleKeyUp = (event: KeyboardEvent) => {
+    if (event.code === "Space" && keyIsDown && socket && status === "connected") {
+      setKeyIsDown(false);
+
+      const speakingSignalMessage: SpeakingSignalMessage = {
+        type: "websocket_speaking_signal_change",
+        is_active: false,
+      };
+      socket.send(stringify(speakingSignalMessage));
+      setMicrophoneStatus("paused");
+      console.log("Recorder pausing");
+      recorder.pause();
+    }
+  };
+
+  document.addEventListener("keydown", handleKeyDown);
+  document.addEventListener("keyup", handleKeyUp);
+
+  return () => {
+    document.removeEventListener("keydown", handleKeyDown);
+    document.removeEventListener("keyup", handleKeyUp);
+  };
+}, [keyIsDown, socket, status]); 
+
+
   // play audio that is queued
   React.useEffect(() => {
     const playArrayBuffer = (arrayBuffer: ArrayBuffer) => {
       audioContext &&
-        audioAnalyser &&
+        micAnalyser && agentAnalyser &&
         audioContext.decodeAudioData(arrayBuffer, (buffer) => {
           const source = audioContext.createBufferSource();
           source.buffer = buffer;
           source.connect(audioContext.destination);
-          source.connect(audioAnalyser);
+          source.connect(agentAnalyser);
           setCurrentSpeaker("agent");
           source.start(0);
           source.onended = () => {
@@ -125,12 +183,17 @@ export const useConversation = (
   }, [audioQueue, processing]);
 
   const stopConversation = (error?: Error) => {
+    console.log('stopConversation: stopping');
     setAudioQueue([]);
     setCurrentSpeaker("none");
     if (error) {
       setError(error);
+      console.log("status set to error");
+
       setStatus("error");
     } else {
+      console.log("status set to idle");
+
       setStatus("idle");
     }
     if (!recorder || !socket) return;
@@ -205,7 +268,7 @@ export const useConversation = (
   });
 
   const startConversation = async () => {
-    if (!audioContext || !audioAnalyser) return;
+    if (!audioContext || !agentAnalyser || !micAnalyser) return;
     setStatus("connecting");
 
     if (!isSafari && !isChrome) {
@@ -284,6 +347,13 @@ export const useConversation = (
         video: false,
         audio: trackConstraints,
       });
+      
+      // Create a MediaStreamAudioSourceNode from the microphone stream
+      const source = audioContext.createMediaStreamSource(audioStream);
+      
+      // Connect the source to the analyser
+      source.connect(micAnalyser);
+
     } catch (error) {
       if (error instanceof DOMException && error.name === "NotAllowedError") {
         alert(
@@ -375,13 +445,15 @@ export const useConversation = (
 
   return {
     status,
+    microphoneStatus,
     start: startConversation,
     stop: stopConversation,
     error,
     toggleActive,
     active,
     setActive,
-    analyserNode: audioAnalyser,
+    agentAnalyserNode: agentAnalyser,
+    micAnalyserNode: micAnalyser,
     transcripts,
     currentSpeaker,
   };
